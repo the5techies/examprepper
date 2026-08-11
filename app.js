@@ -540,6 +540,46 @@ function stopTimer() {
   state.timerId = null;
 }
 
+// Leaving a session early, from either the quiz or the flashcard view -- they share
+// this screen. Whatever was answered is still saved: saveQuizResults skips entries
+// with no answer, so an early exit records real work without inventing results for
+// questions that were never shown. No score is presented, since the run is partial.
+async function exitSession() {
+  const isFlashcards = state.settings.mode === "flashcards";
+  const answered = state.answers.filter(Boolean).length;
+  const detail = isFlashcards
+    ? "Your study time will be saved."
+    : answered
+      ? `Your ${answered} answered question${answered === 1 ? "" : "s"} and study time will be saved. You will not get a score for a partial run.`
+      : "Nothing has been answered yet, so only your study time will be saved.";
+
+  if (!confirm(`Exit this ${isFlashcards ? "flashcard review" : "quiz"}?\n\n${detail}`)) return;
+
+  stopTimer();
+  const button = $("exit-session-btn");
+  button.disabled = true;
+  try {
+    if (state.currentQuiz && state.currentProfile && state.sessionStartedAt) {
+      const elapsed = Math.max(0, Math.round((Date.now() - state.sessionStartedAt) / 1000));
+      if (isFlashcards || !answered) await saveStudyTime(elapsed);
+      else await saveQuizResults(elapsed);
+    }
+  } catch (err) {
+    console.error("Could not save progress while exiting:", err);
+    alert("Could not save your progress for this session. Please check your connection.");
+  } finally {
+    button.disabled = false;
+  }
+
+  // Clear the run so a stale queue cannot leak into the next session.
+  state.queue = [];
+  state.answers = [];
+  state.currentIndex = 0;
+  state.sessionStartedAt = null;
+
+  await goToDashboard();
+}
+
 async function finishSession() {
   stopTimer();
   if (!state.currentQuiz || !state.currentProfile) return;
@@ -1054,6 +1094,7 @@ const manageProfilesControl = document.getElementById("manage-profiles-btn");
 if (addProfileControl) addProfileControl.addEventListener("click", handleAddProfileClick);
 if (manageProfilesControl) manageProfilesControl.addEventListener("click", handleManageProfilesClick);
 
+$("exit-session-btn").addEventListener("click", exitSession);
 $("admin-open-btn").addEventListener("click", openAdminModal);
 $("admin-login-btn").addEventListener("click", adminLogin);
 $("admin-exit-btn").addEventListener("click", adminExit);
