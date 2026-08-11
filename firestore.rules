@@ -30,7 +30,7 @@ service cloud.firestore {
     // The admin password lives in Firebase Auth, never in the client bundle.
     // request.auth.token is signed by Firebase and cannot be forged by a client.
     function isAdmin() {
-      return signedIn() && request.auth.token.email == 'admin@examprepper.app';
+      return signedIn() && request.auth.token.email == 'the4techies@gmail.com';
     }
 
     // /profiles/{profileId}

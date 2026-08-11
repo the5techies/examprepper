@@ -53,7 +53,7 @@ window.closeAdminModal = closeAdminModal;
 // The admin address is not a secret -- it is only an identifier. The password is
 // never in this file: it lives in Firebase Auth, and the Firestore rules grant
 // delete permission by checking this email on the verified auth token.
-const ADMIN_EMAIL = "admin@examprepper.app";
+const ADMIN_EMAIL = "the4techies@gmail.com";
 
 function showScreen(id) {
   document.querySelectorAll(".screen").forEach(s => s.classList.add("hidden"));
