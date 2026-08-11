@@ -1,0 +1,50 @@
+{
+  "topicId": "tissue_skin",
+  "topicName": "Tissue, Skin & Integumentary System",
+  "subtopics": [
+    {
+      "id": "epithelium",
+      "name": "Epithelial Tissue"
+    },
+    {
+      "id": "connective",
+      "name": "Connective Tissue & Cartilage"
+    },
+    {
+      "id": "skin_layers",
+      "name": "Epidermis & Dermis Layers"
+    },
+    {
+      "id": "glands_appendages",
+      "name": "Glands & Hair/Nails"
+    }
+  ],
+  "questions": [
+    {
+      "id": "ts_q01",
+      "subtopicId": "epithelium",
+      "question": "Which type of epithelial tissue is found lining the air sacs of the lungs?",
+      "options": [
+        "Simple squamous",
+        "Stratified cuboidal",
+        "Pseudostratified columnar",
+        "Transitional"
+      ],
+      "answer": 0,
+      "explanation": "The alveoli are lined primarily by simple squamous epithelium."
+    },
+    {
+      "id": "ts_q02",
+      "subtopicId": "skin_layers",
+      "question": "Which layer of the epidermis is only found in thick skin?",
+      "options": [
+        "Stratum basale",
+        "Stratum corneum",
+        "Stratum lucidum",
+        "Stratum granulosum"
+      ],
+      "answer": 2,
+      "explanation": "Stratum lucidum is characteristic of thick skin."
+    }
+  ]
+}

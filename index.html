@@ -1,0 +1,168 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover">
+<title>Study LMS</title>
+<link rel="stylesheet" href="style.css">
+</head>
+<body>
+
+<div id="profile-screen" class="screen full-center">
+  <h1 class="profile-title">Who is studying?</h1>
+  <div id="profiles-row" class="profiles-row"></div>
+  <div class="profile-actions">
+    <button id="add-profile-btn" type="button" class="profile-action add-profile-action" onclick="window.handleAddProfileClick(event)">＋ Add Profile</button>
+    <button id="manage-profiles-btn" type="button" class="profile-action manage-profile-action" onclick="window.handleManageProfilesClick(event)">⚙ Manage Profiles</button>
+  </div>
+</div>
+
+<div id="dashboard-screen" class="screen top-aligned hidden">
+  <header class="dashboard-header">
+    <div class="header-row">
+      <div>
+        <h1 id="dashboard-title">Dashboard</h1>
+        <p>Select a topic to configure your session.</p>
+      </div>
+      <button id="switch-profile-btn" class="manage-btn small-btn">Switch Profile</button>
+    </div>
+  </header>
+  <div id="topic-list"></div>
+  <div class="upload-section">
+    <h3>Import Custom Quiz</h3>
+    <p class="muted">Upload a .json file to add a quiz topic to the shared quiz library.</p>
+    <input type="file" id="jsonUpload" accept=".json" class="hidden-input">
+    <label for="jsonUpload" class="upload-box"><span id="uploadText">+ Choose .json File</span></label>
+  </div>
+</div>
+
+<div id="config-screen" class="screen top-aligned hidden">
+  <header class="dashboard-header">
+    <button class="back-link" onclick="showScreen('dashboard-screen')">← Dashboard</button>
+    <h1 id="config-title">Configure Session</h1>
+    <p id="config-topic-name"></p>
+  </header>
+
+  <div class="topic-card">
+    <div class="section-heading-row">
+      <h2>1. Select Portions</h2>
+      <span id="selected-count" class="stats"></span>
+    </div>
+    <div class="manage-row">
+      <button id="select-all-btn" class="manage-btn">Select All</button>
+      <button id="deselect-all-btn" class="manage-btn">Deselect All</button>
+    </div>
+    <div id="subtopic-list"></div>
+  </div>
+
+  <div class="topic-card">
+    <h2>2. Study Mode & Settings</h2>
+    <label class="dropdown-label">Mode:</label>
+    <select id="study-mode" class="input-field">
+      <option value="quiz">Standard Quiz</option>
+      <option value="weighted">Weighted Quiz (Adaptive)</option>
+      <option value="flashcards">Flashcards (Review Only)</option>
+    </select>
+
+    <label class="dropdown-label">Time Per Question:</label>
+    <select id="time-per-question" class="input-field">
+      <option value="30">30 Seconds</option>
+      <option value="60">60 Seconds</option>
+      <option value="90">90 Seconds</option>
+      <option value="120">120 Seconds</option>
+      <option value="0">Unlimited</option>
+    </select>
+
+    <label class="dropdown-label">Total Questions:</label>
+    <input id="question-count" type="number" class="input-field" value="30" min="1" max="100">
+
+    <label class="checkbox-row">
+      <input id="strict-mode" type="checkbox">
+      <span>Strict Mode (Cannot go back to previous questions)</span>
+    </label>
+  </div>
+
+  <div class="modal-actions bottom-actions">
+    <button class="cancel-btn" onclick="showScreen('dashboard-screen')">✕ Back</button>
+    <button id="start-session-btn" class="action-btn">✓ Start Session</button>
+  </div>
+</div>
+
+<div id="study-screen" class="screen top-aligned hidden">
+  <header class="dashboard-header">
+    <div class="header-row">
+      <div>
+        <h1 id="study-heading">Question 1 of 10</h1>
+        <p id="study-subtopic" class="stats"></p>
+      </div>
+      <span id="quiz-timer" class="stats timer">⏱️ --:--</span>
+    </div>
+    <div class="progress-bar-container"><div id="quiz-progress-bar" class="progress-bar"></div></div>
+  </header>
+
+  <div class="topic-card">
+    <div id="flashcard-label" class="flashcard-label hidden">FLASHCARD</div>
+    <h2 id="question-text">Loading question...</h2>
+    <div id="options-container"></div>
+    <div id="answer-area" class="answer-area hidden"></div>
+  </div>
+
+  <div class="modal-actions bottom-actions">
+    <button id="prev-btn" class="cancel-btn">← Previous</button>
+    <button id="next-btn" class="action-btn">Next →</button>
+  </div>
+</div>
+
+<div id="results-screen" class="screen top-aligned hidden">
+  <header class="dashboard-header">
+    <h1>Session Complete ✨</h1>
+    <p id="results-summary"></p>
+  </header>
+  <div class="topic-card score-card">
+    <div id="score-number" class="score-number">0%</div>
+    <p id="score-detail"></p>
+    <div class="progress-bar-container"><div id="score-bar" class="progress-bar"></div></div>
+  </div>
+  <div id="review-list" class="review-list"></div>
+  <div class="modal-actions bottom-actions">
+    <button class="cancel-btn" onclick="showScreen('dashboard-screen')">← Dashboard</button>
+    <button id="restart-session-btn" class="action-btn">↻ New Session</button>
+  </div>
+</div>
+
+<div id="profile-modal" class="modal hidden">
+  <div class="modal-content">
+    <h2 id="profile-modal-title">Create Profile</h2>
+    <p class="muted">Maximum 4 profiles.</p>
+    <input id="profile-name-input" type="text" maxlength="30" placeholder="Name" class="input-field">
+    <input id="profile-emoji-input" type="text" maxlength="4" placeholder="Emoji (e.g. 🌸)" class="input-field">
+    <div class="modal-actions">
+      <button class="cancel-btn" onclick="closeProfileModal()">✕ Cancel</button>
+      <button id="save-profile-btn" class="action-btn">✓ Save</button>
+    </div>
+  </div>
+</div>
+
+<div id="manage-modal" class="modal hidden">
+  <div class="modal-content">
+    <h2>Manage Profiles</h2>
+    <p class="muted">Rename or delete a profile.</p>
+    <div id="manage-profile-list"></div>
+    <button class="cancel-btn" onclick="closeManageModal()">Done</button>
+  </div>
+</div>
+
+<div id="confirm-modal" class="modal hidden">
+  <div class="modal-content">
+    <h2>Delete Profile?</h2>
+    <p id="delete-message"></p>
+    <div class="modal-actions">
+      <button class="cancel-btn" onclick="closeConfirmModal()">Cancel</button>
+      <button id="confirm-delete-btn" class="danger-btn">Delete</button>
+    </div>
+  </div>
+</div>
+
+<script type="module" src="app.js"></script>
+</body>
+</html>
