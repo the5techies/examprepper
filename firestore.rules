@@ -1,0 +1,43 @@
+rules_version = '2';
+
+// ExamPrepper Firestore rules.
+//
+// Model: a shared-device app with up to 4 no-password profiles. Every signed-in
+// client (anonymous) sees the same profiles and quizzes on purpose, so data is NOT
+// scoped by uid -- requiring auth only proves the request came through the app and
+// closes the database to unauthenticated internet traffic.
+//
+// Limitation, stated plainly: the Firebase web config in app.js is public, so anyone
+// can obtain an anonymous token. This stops drive-by scraping and bots, not a
+// determined person. Move to real accounts with uid-scoped paths for actual privacy.
+//
+// Deliberately has NO time-based expiry -- the previous test-mode rule would have
+// denied all requests after 2026-09-10 and silently broken the app.
+
+service cloud.firestore {
+  match /databases/{database}/documents {
+
+    function signedIn() {
+      return request.auth != null;
+    }
+
+    // /profiles/{profileId}
+    match /profiles/{profileId} {
+      allow read, write: if signedIn();
+
+      // /profiles/{profileId}/progress/{topicId}
+      match /progress/{topicId} {
+        allow read, write: if signedIn();
+      }
+    }
+
+    // /quizzes/{topicId}
+    // Writable because app.js seeds quiz documents via setDoc(quizDoc(topicId), quiz).
+    match /quizzes/{topicId} {
+      allow read, write: if signedIn();
+    }
+
+    // Any path not matched above is denied by default -- Firestore grants access only
+    // when a matching rule explicitly allows it.
+  }
+}

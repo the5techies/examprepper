@@ -1,5 +1,6 @@
 import { initializeApp } from "https://www.gstatic.com/firebasejs/12.1.0/firebase-app.js";
 import { getFirestore, collection, doc, getDocs, setDoc, updateDoc, deleteDoc, getDoc, serverTimestamp, increment, writeBatch } from "https://www.gstatic.com/firebasejs/12.1.0/firebase-firestore.js";
+import { getAuth, signInAnonymously } from "https://www.gstatic.com/firebasejs/12.1.0/firebase-auth.js";
 
 const firebaseConfig = {
   apiKey: "AIzaSyBz29gbHkaiCcH1X58qxtOffQD-0XHORKg",
@@ -13,6 +14,7 @@ const firebaseConfig = {
 
 const firebaseApp = initializeApp(firebaseConfig);
 const db = getFirestore(firebaseApp);
+const auth = getAuth(firebaseApp);
 
 const state = {
   profiles: [],
@@ -54,6 +56,16 @@ function quizDoc(topicId) { return doc(db, "quizzes", topicId); }
 
 async function init() {
   try {
+    // Firestore rules require an authenticated caller. Anonymous sign-in keeps the
+    // no-password, pick-a-profile flow while closing the database to the open internet.
+    // Profiles stay shared across sessions on purpose, so the anonymous uid is not used
+    // to scope data -- it only proves the request came through the app.
+    try {
+      await signInAnonymously(auth);
+    } catch (authErr) {
+      console.error("Anonymous sign-in failed. Enable Anonymous auth in the Firebase console (Authentication -> Sign-in method). All Firestore reads and writes will be denied until then.", authErr);
+    }
+
     // Profiles are optional at first launch. The profile screen is always usable.
     try {
       await loadProfiles();
