@@ -268,9 +268,14 @@ function saveConfig() {
   }
 }
 
-function openConfig(quiz) {
+async function openConfig(quiz) {
   state.currentQuiz = quiz;
   const topicId = quiz.topicId || quiz.id;
+
+  // The per-topic progress cache is what the subtopic percentages read from. Drop it
+  // when the topic changes so a previous topic's numbers can never be shown here.
+  if (state._progressCacheTopicId !== topicId) state._progressCache = null;
+
   const available = (quiz.subtopics || []).map(s => s.id);
   const saved = state.currentProfile ? loadSavedConfig(state.currentProfile.id, topicId) : null;
 
@@ -291,6 +296,21 @@ function openConfig(quiz) {
   renderSubtopics();
   updateQuestionLimit();
   showScreen("config-screen");
+
+  // Show the screen first, then fetch progress and re-render. cacheProgress() used to
+  // run only when a session started, so the percentages here read an empty cache on
+  // first visit and every subtopic showed 0% until you had taken a quiz and come back.
+  // Awaiting before showScreen would instead stall the screen transition.
+  try {
+    await cacheProgress();
+  } catch (err) {
+    // The screen is already usable without percentages, and openConfig is called from
+    // onclick handlers that do not await it, so swallow rather than reject unhandled.
+    console.warn("Could not load subtopic progress:", err);
+    return;
+  }
+  renderSubtopics();
+  updateQuestionLimit();
 }
 
 function renderSubtopics() {
@@ -326,8 +346,11 @@ function getProgressDataSync() {
 }
 async function cacheProgress() {
   if (!state.currentProfile || !state.currentQuiz) return;
-  const snap = await getDoc(progressDoc(state.currentProfile.id, state.currentQuiz.topicId || state.currentQuiz.id));
+  const topicId = state.currentQuiz.topicId || state.currentQuiz.id;
+  const snap = await getDoc(progressDoc(state.currentProfile.id, topicId));
   state._progressCache = snap.exists() ? snap.data() : {};
+  // Recorded so openConfig can tell whether the cache belongs to the topic being opened.
+  state._progressCacheTopicId = topicId;
 }
 function getSubtopicProgress(subtopicId) {
   const qs = (state.currentQuiz?.questions || []).filter(q => q.subtopicId === subtopicId);
