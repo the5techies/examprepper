@@ -49,11 +49,20 @@ window.closeProfileModal = closeProfileModal;
 window.closeManageModal = closeManageModal;
 window.closeConfirmModal = closeConfirmModal;
 window.closeAdminModal = closeAdminModal;
+window.goToDashboard = goToDashboard;
 
 // The admin address is not a secret -- it is only an identifier. The password is
 // never in this file: it lives in Firebase Auth, and the Firestore rules grant
 // delete permission by checking this email on the verified auth token.
 const ADMIN_EMAIL = "the4techies@gmail.com";
+
+// Returning to the dashboard must re-read progress, not just unhide the screen.
+// The back links used to call showScreen directly, which left stale percentages
+// and times on the cards until a manual page reload.
+async function goToDashboard() {
+  showScreen("dashboard-screen");
+  await renderDashboard();
+}
 
 function showScreen(id) {
   document.querySelectorAll(".screen").forEach(s => s.classList.add("hidden"));
@@ -226,9 +235,57 @@ async function calculateTopicProgress(quiz) {
   return { percent, mastered, total, timeSpent: data.timeSpent || 0 };
 }
 
+/* ------------------------------------------- remembered session settings ---- */
+// Kept in localStorage rather than Firestore: these are per-device preferences, and
+// reading them is synchronous, so the config screen restores with no extra round
+// trip. Keyed by profile and topic so each person keeps their own choices.
+function configKey(profileId, topicId) {
+  return `examprepper:config:${profileId}:${topicId}`;
+}
+
+function loadSavedConfig(profileId, topicId) {
+  try {
+    const raw = localStorage.getItem(configKey(profileId, topicId));
+    return raw ? JSON.parse(raw) : null;
+  } catch (err) {
+    return null;
+  }
+}
+
+function saveConfig() {
+  if (!state.currentProfile || !state.currentQuiz) return;
+  const topicId = state.currentQuiz.topicId || state.currentQuiz.id;
+  try {
+    localStorage.setItem(configKey(state.currentProfile.id, topicId), JSON.stringify({
+      subtopics: [...state.selectedSubtopics],
+      mode: $("study-mode").value,
+      time: $("time-per-question").value,
+      count: $("question-count").value,
+      strict: $("strict-mode").checked
+    }));
+  } catch (err) {
+    // Private browsing or a full quota. Losing the preference is not worth an error.
+  }
+}
+
 function openConfig(quiz) {
   state.currentQuiz = quiz;
-  state.selectedSubtopics = new Set((quiz.subtopics || []).map(s => s.id));
+  const topicId = quiz.topicId || quiz.id;
+  const available = (quiz.subtopics || []).map(s => s.id);
+  const saved = state.currentProfile ? loadSavedConfig(state.currentProfile.id, topicId) : null;
+
+  // Only restore subtopics that still exist, in case the test was re-imported with
+  // different portions. Fall back to selecting everything.
+  const restored = (saved?.subtopics || []).filter(subId => available.includes(subId));
+  state.selectedSubtopics = new Set(restored.length ? restored : available);
+
+  if (saved) {
+    if (saved.mode) $("study-mode").value = saved.mode;
+    if (saved.time != null) $("time-per-question").value = saved.time;
+    if (saved.count) $("question-count").value = saved.count;
+    $("strict-mode").checked = !!saved.strict;
+  }
+
   $("config-title").textContent = "Configure Session";
   $("config-topic-name").textContent = quiz.topicName || quiz.title || quiz.id;
   renderSubtopics();
@@ -257,6 +314,7 @@ function renderSubtopics() {
     item.querySelector("input").onchange = e => {
       e.target.checked ? state.selectedSubtopics.add(sub.id) : state.selectedSubtopics.delete(sub.id);
       updateQuestionLimit();
+      saveConfig();
     };
     list.appendChild(item);
   });
@@ -282,13 +340,18 @@ function getSubtopicProgress(subtopicId) {
 $("select-all-btn").onclick = async () => {
   (state.currentQuiz.subtopics || []).forEach(s => state.selectedSubtopics.add(s.id));
   renderSubtopics();
+  saveConfig();
 };
 $("deselect-all-btn").onclick = () => {
   state.selectedSubtopics.clear();
   renderSubtopics();
+  saveConfig();
 };
-$("study-mode").onchange = updateQuestionLimit;
-$("question-count").oninput = updateQuestionLimit;
+// Save on change, not only on start, so backing out of the screen still remembers.
+$("study-mode").onchange = () => { updateQuestionLimit(); saveConfig(); };
+$("question-count").oninput = () => { updateQuestionLimit(); saveConfig(); };
+$("time-per-question").onchange = saveConfig;
+$("strict-mode").onchange = saveConfig;
 
 async function updateQuestionLimit() {
   const quiz = state.currentQuiz;
@@ -316,6 +379,7 @@ $("start-session-btn").onclick = async () => {
     strict: $("strict-mode").checked,
     count: Math.min(Number($("question-count").value) || 30, available.length)
   };
+  saveConfig();
 
   state.queue = buildQueue(available, state.settings.count, state.settings.mode);
   state.currentIndex = 0;

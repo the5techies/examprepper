@@ -65,7 +65,7 @@
 
 <div id="config-screen" class="screen top-aligned hidden">
   <header class="dashboard-header">
-    <button class="back-link" onclick="showScreen('dashboard-screen')">← Dashboard</button>
+    <button class="back-link" onclick="goToDashboard()">← Dashboard</button>
     <h1 id="config-title">Configure Session</h1>
     <p id="config-topic-name"></p>
   </header>
@@ -110,7 +110,7 @@
   </div>
 
   <div class="modal-actions bottom-actions">
-    <button class="cancel-btn" onclick="showScreen('dashboard-screen')">✕ Back</button>
+    <button class="cancel-btn" onclick="goToDashboard()">✕ Back</button>
     <button id="start-session-btn" class="action-btn">✓ Start Session</button>
   </div>
 </div>
@@ -152,7 +152,7 @@
   </div>
   <div id="review-list" class="review-list"></div>
   <div class="modal-actions bottom-actions">
-    <button class="cancel-btn" onclick="showScreen('dashboard-screen')">← Dashboard</button>
+    <button class="cancel-btn" onclick="goToDashboard()">← Dashboard</button>
     <button id="restart-session-btn" class="action-btn">↻ New Session</button>
   </div>
 </div>
