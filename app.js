@@ -35,6 +35,7 @@ const state = {
   secondsLeft: 0,
   editingProfileId: null,
   deletingProfileId: null,
+  deletingTopicId: null,
   settings: {}
 };
 
@@ -186,8 +187,10 @@ async function renderDashboard() {
     const progress = await calculateTopicProgress(quiz);
     const card = document.createElement("div");
     card.className = "topic-card";
+    const topicLabel = quiz.topicName || quiz.title || quiz.id;
     card.innerHTML = `
-      <h2>${escapeHtml(quiz.topicName || quiz.title || quiz.id)}</h2>
+      <button class="topic-delete-btn" type="button" title="Delete this test" aria-label="Delete ${escapeHtml(topicLabel)}">🗑</button>
+      <h2>${escapeHtml(topicLabel)}</h2>
       <div class="progress-bar-container"><div class="progress-bar" style="width:${progress.percent}%"></div></div>
       <div class="topic-meta">
         <p class="stats">${progress.percent}% covered</p>
@@ -195,7 +198,10 @@ async function renderDashboard() {
       </div>
       <p class="stats">${progress.mastered}/${progress.total} questions mastered</p>
       <button class="action-btn">Configure Session →</button>`;
-    card.querySelector("button").onclick = () => openConfig(quiz);
+    // Select by class: the card now holds two buttons, so querySelector("button")
+    // would pick up the delete control instead.
+    card.querySelector(".action-btn").onclick = () => openConfig(quiz);
+    card.querySelector(".topic-delete-btn").onclick = () => openQuizDeleteConfirm(quiz);
     list.appendChild(card);
   }
 }
@@ -695,7 +701,42 @@ function openDeleteConfirm(id) {
   $("delete-message").textContent=`Delete ${p.name}? This will permanently remove this profile and all of its personal quiz statistics.`;
   $("confirm-modal").classList.remove("hidden");
 }
+// Quizzes are shared by every profile, so deleting one removes it for all users.
+// The per-profile progress documents are left in place: they are invisible without
+// the quiz, and re-importing the same topicId restores each person's history.
+function openQuizDeleteConfirm(quiz) {
+  const topicId = quiz.topicId || quiz.id;
+  if (!topicId) return;
+  state.deletingTopicId = topicId;
+  state.deletingProfileId = null;
+  $("delete-message").textContent =
+    `Delete "${quiz.topicName || quiz.title || topicId}"? This removes the test for every profile. Your saved progress for it is kept in case you import it again.`;
+  $("confirm-modal").classList.remove("hidden");
+}
+
+async function deleteQuizConfirmed() {
+  const topicId = state.deletingTopicId;
+  const button = $("confirm-delete-btn");
+  button.disabled = true;
+  button.textContent = "Deleting…";
+  try {
+    await deleteDoc(quizDoc(topicId));
+    state.quizzes = state.quizzes.filter(q => (q.topicId || q.id) !== topicId);
+    closeConfirmModal();
+    await renderDashboard();
+  } catch (err) {
+    console.error("Could not delete quiz:", err);
+    alert("Could not delete that test. Please check your connection and try again.");
+  } finally {
+    button.disabled = false;
+    button.textContent = "Delete";
+  }
+}
+
 $("confirm-delete-btn").onclick=async()=>{
+  // The confirm modal is shared between profile and test deletion.
+  if (state.deletingTopicId) return deleteQuizConfirmed();
+
   const id=state.deletingProfileId;
   if (!id) return;
 
@@ -751,6 +792,7 @@ $("confirm-delete-btn").onclick=async()=>{
 function closeConfirmModal() {
   $("confirm-modal").classList.add("hidden");
   state.deletingProfileId=null;
+  state.deletingTopicId=null;
 }
 
 init();
