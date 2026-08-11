@@ -54,7 +54,14 @@ function progressDoc(profileId, topicId) {
 }
 function quizDoc(topicId) { return doc(db, "quizzes", topicId); }
 
+// Resolves once the shared quiz documents have been fetched. The profile screen does
+// not need them, so the dashboard awaits this instead of blocking first paint.
+let quizzesReady = Promise.resolve();
+
 async function init() {
+  // Paint something before the first network call so an empty row never looks broken.
+  renderProfilesLoading();
+
   try {
     // Firestore rules require an authenticated caller. Anonymous sign-in keeps the
     // no-password, pick-a-profile flow while closing the database to the open internet.
@@ -66,19 +73,19 @@ async function init() {
       console.error("Anonymous sign-in failed. Enable Anonymous auth in the Firebase console (Authentication -> Sign-in method). All Firestore reads and writes will be denied until then.", authErr);
     }
 
+    // Kick the quiz read off now but do not await it here -- it is the heaviest read
+    // (every question of every topic) and nothing on the profile screen uses it.
+    quizzesReady = loadQuizzes().catch(quizErr => {
+      console.warn("Could not load quizzes yet:", quizErr);
+      state.quizzes = [];
+    });
+
     // Profiles are optional at first launch. The profile screen is always usable.
     try {
       await loadProfiles();
     } catch (profileErr) {
       console.warn("Could not load profiles:", profileErr);
       state.profiles = [];
-    }
-
-    try {
-      await loadQuizzes();
-    } catch (quizErr) {
-      console.warn("Could not load quizzes yet:", quizErr);
-      state.quizzes = [];
     }
 
     renderProfiles();
@@ -97,6 +104,10 @@ async function loadProfiles() {
 async function loadQuizzes() {
   const snap = await getDocs(collection(db, "quizzes"));
   state.quizzes = snap.docs.map(d => ({ id: d.id, ...d.data() }));
+}
+
+function renderProfilesLoading() {
+  $("profiles-row").innerHTML = `<div class="profiles-loading">Loading profiles…</div>`;
 }
 
 function renderProfiles() {
@@ -134,6 +145,12 @@ async function selectProfile(id) {
 
 async function renderDashboard() {
   const list = $("topic-list");
+
+  // Quizzes load in the background during init so they do not delay the profile
+  // screen. If the user reaches the dashboard first, wait for that read here.
+  list.innerHTML = `<div class="topic-card"><h2>Loading topics…</h2></div>`;
+  await quizzesReady;
+
   list.innerHTML = "";
 
   if (!state.quizzes.length) {

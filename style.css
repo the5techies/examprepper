@@ -23,6 +23,12 @@ body {
 button, input, select { font: inherit; }
 .hidden { display: none !important; }
 
+.profiles-loading {
+  color: var(--rose); font-weight: bold; opacity: .75;
+  padding: 20px; animation: pulse 1.2s ease-in-out infinite;
+}
+@keyframes pulse { 0%,100% { opacity:.4 } 50% { opacity:.9 } }
+
 .screen { width: 100%; animation: fadeIn .25s ease; }
 .full-center {
   display: flex; flex-direction: column; align-items: center; justify-content: center;
