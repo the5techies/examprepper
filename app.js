@@ -724,7 +724,7 @@ $("confirm-modal").addEventListener("click", (e) => {
   if (e.target === $("confirm-modal")) closeConfirmModal();
 });
 
-\n// Explicit DOM binding for profile controls.
+// Explicit DOM binding for profile controls.
 const addProfileControl = document.getElementById("add-profile-btn");
 const manageProfilesControl = document.getElementById("manage-profiles-btn");
 if (addProfileControl) addProfileControl.addEventListener("click", handleAddProfileClick);
