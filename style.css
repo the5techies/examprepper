@@ -88,6 +88,20 @@ p { color: #8a7a80; line-height: 1.5; }
   opacity: 1; background: var(--soft);
 }
 .topic-delete-btn:disabled { opacity: .25; cursor: default; }
+
+/* ------------------------------------------------------------------ admin -- */
+.admin-action { color: var(--rose); }
+.admin-section-title { margin: 10px 0 14px; font-size: 1.25rem; }
+.admin-error { color: #b4405a; font-weight: 600; margin: 6px 0 0; }
+.admin-profile-card h2 { margin-bottom: 6px; }
+.admin-table-scroll { overflow-x: auto; margin-top: 14px; }
+.admin-table { width: 100%; border-collapse: collapse; font-size: .9rem; }
+.admin-table th, .admin-table td {
+  text-align: left; padding: 8px 10px; border-bottom: 1px solid var(--soft);
+  white-space: nowrap;
+}
+.admin-table th { font-weight: 700; color: var(--rose); }
+.admin-table tbody tr:last-child td { border-bottom: none; }
 .topic-meta { display:flex; justify-content:space-between; gap:10px; flex-wrap:wrap; }
 .progress-bar-container {
   width:100%; height:10px; background:var(--soft); border-radius:10px; margin:15px 0; overflow:hidden;

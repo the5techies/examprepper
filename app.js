@@ -1,6 +1,6 @@
 import { initializeApp } from "https://www.gstatic.com/firebasejs/12.1.0/firebase-app.js";
 import { initializeFirestore, persistentLocalCache, persistentMultipleTabManager, getDocsFromCache, collection, doc, getDocs, setDoc, updateDoc, deleteDoc, getDoc, serverTimestamp, increment, writeBatch } from "https://www.gstatic.com/firebasejs/12.1.0/firebase-firestore.js";
-import { getAuth, signInAnonymously } from "https://www.gstatic.com/firebasejs/12.1.0/firebase-auth.js";
+import { getAuth, signInAnonymously, signInWithEmailAndPassword, signOut } from "https://www.gstatic.com/firebasejs/12.1.0/firebase-auth.js";
 
 const firebaseConfig = {
   apiKey: "AIzaSyBz29gbHkaiCcH1X58qxtOffQD-0XHORKg",
@@ -36,6 +36,7 @@ const state = {
   editingProfileId: null,
   deletingProfileId: null,
   deletingTopicId: null,
+  isAdmin: false,
   settings: {}
 };
 
@@ -47,6 +48,12 @@ window.handleManageProfilesClick = handleManageProfilesClick;
 window.closeProfileModal = closeProfileModal;
 window.closeManageModal = closeManageModal;
 window.closeConfirmModal = closeConfirmModal;
+window.closeAdminModal = closeAdminModal;
+
+// The admin address is not a secret -- it is only an identifier. The password is
+// never in this file: it lives in Firebase Auth, and the Firestore rules grant
+// delete permission by checking this email on the verified auth token.
+const ADMIN_EMAIL = "admin@examprepper.app";
 
 function showScreen(id) {
   document.querySelectorAll(".screen").forEach(s => s.classList.add("hidden"));
@@ -188,8 +195,9 @@ async function renderDashboard() {
     const card = document.createElement("div");
     card.className = "topic-card";
     const topicLabel = quiz.topicName || quiz.title || quiz.id;
+    // Deleting is an admin-only action, so ordinary profiles get no control at all.
     card.innerHTML = `
-      <button class="topic-delete-btn" type="button" title="Delete this test" aria-label="Delete ${escapeHtml(topicLabel)}">🗑</button>
+      ${state.isAdmin ? `<button class="topic-delete-btn" type="button" title="Delete this test" aria-label="Delete ${escapeHtml(topicLabel)}">🗑</button>` : ""}
       <h2>${escapeHtml(topicLabel)}</h2>
       <div class="progress-bar-container"><div class="progress-bar" style="width:${progress.percent}%"></div></div>
       <div class="topic-meta">
@@ -201,7 +209,8 @@ async function renderDashboard() {
     // Select by class: the card now holds two buttons, so querySelector("button")
     // would pick up the delete control instead.
     card.querySelector(".action-btn").onclick = () => openConfig(quiz);
-    card.querySelector(".topic-delete-btn").onclick = () => openQuizDeleteConfirm(quiz);
+    const cardDelete = card.querySelector(".topic-delete-btn");
+    if (cardDelete) cardDelete.onclick = () => openQuizDeleteConfirm(quiz);
     list.appendChild(card);
   }
 }
@@ -680,15 +689,181 @@ function renderManageProfiles() {
   state.profiles.forEach(p=>{
     const row=document.createElement("div");
     row.className="manage-profile-item";
+    // Profile deletion moved to the admin screen, so normal use offers rename only.
     row.innerHTML=`<div class="manage-profile-avatar">${escapeHtml(p.emoji||"🌸")}</div>
       <div class="manage-profile-name">${escapeHtml(p.name)}</div>
       <button class="icon-btn" title="Rename">✏</button>
-      <button class="icon-btn" title="Delete">🗑</button>`;
+      ${state.isAdmin ? `<button class="icon-btn" title="Delete">🗑</button>` : ""}`;
     row.children[2].onclick=()=>openProfileModal(p.id);
-    row.children[3].onclick=()=>openDeleteConfirm(p.id);
+    if (row.children[3]) row.children[3].onclick=()=>openDeleteConfirm(p.id);
     list.appendChild(row);
   });
+  $("manage-modal-hint").textContent = state.isAdmin
+    ? "Rename or delete a profile."
+    : "Rename a profile. Deleting requires the admin account.";
 }
+/* ---------------------------------------------------------------- admin ---- */
+
+function openAdminModal() {
+  $("admin-password-input").value = "";
+  $("admin-login-error").classList.add("hidden");
+  $("admin-modal").classList.remove("hidden");
+  $("admin-password-input").focus();
+}
+function closeAdminModal() {
+  $("admin-modal").classList.add("hidden");
+  $("admin-password-input").value = "";
+}
+
+async function adminLogin() {
+  const password = $("admin-password-input").value;
+  const err = $("admin-login-error");
+  const button = $("admin-login-btn");
+  if (!password) {
+    err.textContent = "Enter the admin password.";
+    err.classList.remove("hidden");
+    return;
+  }
+  button.disabled = true;
+  button.textContent = "Signing in…";
+  try {
+    await signInWithEmailAndPassword(auth, ADMIN_EMAIL, password);
+    state.isAdmin = true;
+    closeAdminModal();
+    showScreen("admin-screen");
+    await renderAdmin();
+  } catch (loginErr) {
+    // Firebase returns the same code for a wrong password and an unknown user,
+    // so do not try to be more specific than this.
+    console.warn("Admin sign-in failed:", loginErr?.code);
+    err.textContent = loginErr?.code === "auth/too-many-requests"
+      ? "Too many attempts. Wait a moment and try again."
+      : "Incorrect password.";
+    err.classList.remove("hidden");
+  } finally {
+    button.disabled = false;
+    button.textContent = "Sign In";
+  }
+}
+
+async function adminExit() {
+  state.isAdmin = false;
+  try {
+    // Drop the admin credential and go back to an ordinary anonymous session so a
+    // shared device is never left holding delete rights.
+    await signOut(auth);
+    await signInAnonymously(auth);
+  } catch (err) {
+    console.error("Could not return to an anonymous session:", err);
+  }
+  await loadProfiles().catch(() => {});
+  renderProfiles();
+  showScreen("profile-screen");
+}
+
+// Pulls every profile's progress documents so the admin view can show real numbers
+// rather than just names. One read per profile, so it stays cheap at 3-4 profiles.
+async function collectProfileStats(profile) {
+  const snap = await getDocs(collection(db, "profiles", profile.id, "progress"));
+  const topics = snap.docs.map(d => {
+    const data = d.data();
+    const questions = data.questions || {};
+    const ids = Object.keys(questions);
+    const mastered = ids.filter(k => questions[k]?.state === "MASTERED").length;
+    const quiz = state.quizzes.find(q => (q.topicId || q.id) === d.id);
+    return {
+      topicId: d.id,
+      topicName: quiz?.topicName || quiz?.title || d.id,
+      seen: ids.length,
+      mastered,
+      total: (quiz?.questions || []).length,
+      timeSpent: data.timeSpent || 0,
+      attempts: data.attempts || 0,
+      lastAttempt: data.lastAttempt?.toDate ? data.lastAttempt.toDate() : null
+    };
+  });
+  topics.sort((a, b) => a.topicName.localeCompare(b.topicName));
+  return topics;
+}
+
+async function renderAdmin() {
+  const profileWrap = $("admin-profiles");
+  const testWrap = $("admin-tests");
+  profileWrap.innerHTML = `<div class="topic-card"><h2>Loading…</h2></div>`;
+  testWrap.innerHTML = "";
+
+  await quizzesReady;
+  try {
+    await loadProfiles();
+  } catch (err) {
+    console.warn("Admin could not refresh profiles:", err);
+  }
+
+  profileWrap.innerHTML = "";
+  if (!state.profiles.length) {
+    profileWrap.innerHTML = `<div class="topic-card"><p class="stats">No profiles yet.</p></div>`;
+  }
+
+  for (const profile of state.profiles) {
+    const topics = await collectProfileStats(profile).catch(() => []);
+    const totalTime = topics.reduce((sum, t) => sum + t.timeSpent, 0);
+    const totalMastered = topics.reduce((sum, t) => sum + t.mastered, 0);
+    const totalSeen = topics.reduce((sum, t) => sum + t.seen, 0);
+
+    const rows = topics.length
+      ? topics.map(t => `
+          <tr>
+            <td>${escapeHtml(t.topicName)}</td>
+            <td>${t.mastered}/${t.total || "?"}</td>
+            <td>${t.seen}</td>
+            <td>${t.attempts}</td>
+            <td>${formatDuration(t.timeSpent)}</td>
+            <td>${t.lastAttempt ? t.lastAttempt.toLocaleDateString() : "—"}</td>
+          </tr>`).join("")
+      : `<tr><td colspan="6" class="muted">No study history yet.</td></tr>`;
+
+    const card = document.createElement("div");
+    card.className = "topic-card admin-profile-card";
+    card.innerHTML = `
+      <button class="topic-delete-btn" type="button" title="Delete this profile" aria-label="Delete profile ${escapeHtml(profile.name)}">🗑</button>
+      <h2>${escapeHtml(profile.emoji || "🌸")} ${escapeHtml(profile.name)}</h2>
+      <div class="topic-meta">
+        <p class="stats">${totalMastered} mastered</p>
+        <p class="stats">${totalSeen} questions seen</p>
+        <p class="stats">Total time: ${formatDuration(totalTime)}</p>
+      </div>
+      <div class="admin-table-scroll">
+        <table class="admin-table">
+          <thead><tr><th>Topic</th><th>Mastered</th><th>Seen</th><th>Attempts</th><th>Time</th><th>Last</th></tr></thead>
+          <tbody>${rows}</tbody>
+        </table>
+      </div>`;
+    card.querySelector(".topic-delete-btn").onclick = () => openDeleteConfirm(profile.id);
+    profileWrap.appendChild(card);
+  }
+
+  if (!state.quizzes.length) {
+    testWrap.innerHTML = `<div class="topic-card"><p class="stats">No tests imported yet.</p></div>`;
+    return;
+  }
+  for (const quiz of state.quizzes) {
+    const label = quiz.topicName || quiz.title || quiz.id;
+    const card = document.createElement("div");
+    card.className = "topic-card";
+    card.innerHTML = `
+      <button class="topic-delete-btn" type="button" title="Delete this test" aria-label="Delete ${escapeHtml(label)}">🗑</button>
+      <h2>${escapeHtml(label)}</h2>
+      <p class="stats">${(quiz.questions || []).length} questions · ${(quiz.subtopics || []).length} subtopics</p>`;
+    card.querySelector(".topic-delete-btn").onclick = () => openQuizDeleteConfirm(quiz);
+    testWrap.appendChild(card);
+  }
+}
+
+// After any delete, refresh whichever view is on screen.
+async function refreshAfterDelete() {
+  if (!$("admin-screen").classList.contains("hidden")) await renderAdmin();
+}
+
 function closeProfileModal() {
   $("profile-modal").classList.add("hidden");
   state.editingProfileId=null;
@@ -723,7 +898,8 @@ async function deleteQuizConfirmed() {
     await deleteDoc(quizDoc(topicId));
     state.quizzes = state.quizzes.filter(q => (q.topicId || q.id) !== topicId);
     closeConfirmModal();
-    await renderDashboard();
+    if (!$("admin-screen").classList.contains("hidden")) await renderAdmin();
+    else await renderDashboard();
   } catch (err) {
     console.error("Could not delete quiz:", err);
     alert("Could not delete that test. Please check your connection and try again.");
@@ -780,6 +956,7 @@ $("confirm-delete-btn").onclick=async()=>{
     closeConfirmModal();
     renderProfiles();
     renderManageProfiles();
+    await refreshAfterDelete();
 
   } catch(err) {
     console.error(err);
@@ -812,3 +989,13 @@ const addProfileControl = document.getElementById("add-profile-btn");
 const manageProfilesControl = document.getElementById("manage-profiles-btn");
 if (addProfileControl) addProfileControl.addEventListener("click", handleAddProfileClick);
 if (manageProfilesControl) manageProfilesControl.addEventListener("click", handleManageProfilesClick);
+
+$("admin-open-btn").addEventListener("click", openAdminModal);
+$("admin-login-btn").addEventListener("click", adminLogin);
+$("admin-exit-btn").addEventListener("click", adminExit);
+$("admin-password-input").addEventListener("keydown", e => {
+  if (e.key === "Enter") adminLogin();
+});
+$("admin-modal").addEventListener("click", e => {
+  if (e.target === $("admin-modal")) closeAdminModal();
+});

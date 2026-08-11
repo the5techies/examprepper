@@ -24,7 +24,24 @@
   <div class="profile-actions">
     <button id="add-profile-btn" type="button" class="profile-action add-profile-action">＋ Add Profile</button>
     <button id="manage-profiles-btn" type="button" class="profile-action manage-profile-action">⚙ Manage Profiles</button>
+    <button id="admin-open-btn" type="button" class="profile-action admin-action">🔑 Admin</button>
   </div>
+</div>
+
+<div id="admin-screen" class="screen top-aligned hidden">
+  <header class="dashboard-header">
+    <div class="header-row">
+      <div>
+        <h1>Admin</h1>
+        <p>Every profile, its statistics, and the shared tests.</p>
+      </div>
+      <button id="admin-exit-btn" class="manage-btn small-btn">Exit Admin</button>
+    </div>
+  </header>
+  <h2 class="admin-section-title">Profiles</h2>
+  <div id="admin-profiles"></div>
+  <h2 class="admin-section-title">Tests</h2>
+  <div id="admin-tests"></div>
 </div>
 
 <div id="dashboard-screen" class="screen top-aligned hidden">
@@ -153,10 +170,23 @@
   </div>
 </div>
 
+<div id="admin-modal" class="modal hidden">
+  <div class="modal-content">
+    <h2>Admin Sign In</h2>
+    <p class="muted">Deleting profiles and tests requires the admin account.</p>
+    <input id="admin-password-input" type="password" placeholder="Admin password" class="input-field" autocomplete="current-password">
+    <p id="admin-login-error" class="admin-error hidden"></p>
+    <div class="modal-actions">
+      <button class="cancel-btn" onclick="closeAdminModal()">✕ Cancel</button>
+      <button id="admin-login-btn" class="action-btn">Sign In</button>
+    </div>
+  </div>
+</div>
+
 <div id="manage-modal" class="modal hidden">
   <div class="modal-content">
     <h2>Manage Profiles</h2>
-    <p class="muted">Rename or delete a profile.</p>
+    <p class="muted" id="manage-modal-hint">Rename a profile.</p>
     <div id="manage-profile-list"></div>
     <button class="cancel-btn" onclick="closeManageModal()">Done</button>
   </div>

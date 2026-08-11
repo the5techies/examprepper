@@ -7,11 +7,17 @@ rules_version = '2';
 // scoped by uid -- requiring auth only proves the request came through the app and
 // closes the database to unauthenticated internet traffic.
 //
-// Limitation, stated plainly: the Firebase web config in app.js is public, so anyone
-// can obtain an anonymous token. This stops drive-by scraping and bots, not a
-// determined person. Move to real accounts with uid-scoped paths for actual privacy.
+// Deleting is different. Only the admin account may delete profiles, per-profile
+// progress, or shared tests. This is enforced here on the verified auth token, so
+// hiding the buttons in the UI is a convenience, not the security boundary -- a
+// delete issued directly against the API by an ordinary anonymous client fails too.
 //
-// Deliberately has NO time-based expiry -- the previous test-mode rule would have
+// Limitation, stated plainly: the Firebase web config in app.js is public, so anyone
+// can obtain an anonymous token and read or write profiles, progress, and quiz
+// content. Deletion is the only privileged action. Move to real accounts with
+// uid-scoped paths if the data itself needs to be private.
+//
+// Deliberately has NO time-based expiry -- the original test-mode rule would have
 // denied all requests after 2026-09-10 and silently broken the app.
 
 service cloud.firestore {
@@ -21,20 +27,33 @@ service cloud.firestore {
       return request.auth != null;
     }
 
+    // The admin password lives in Firebase Auth, never in the client bundle.
+    // request.auth.token is signed by Firebase and cannot be forged by a client.
+    function isAdmin() {
+      return signedIn() && request.auth.token.email == 'admin@examprepper.app';
+    }
+
     // /profiles/{profileId}
     match /profiles/{profileId} {
-      allow read, write: if signedIn();
+      allow read:           if signedIn();
+      allow create, update: if signedIn();
+      allow delete:         if isAdmin();
 
       // /profiles/{profileId}/progress/{topicId}
+      // Sessions write here constantly, so ordinary clients need create and update.
       match /progress/{topicId} {
-        allow read, write: if signedIn();
+        allow read:           if signedIn();
+        allow create, update: if signedIn();
+        allow delete:         if isAdmin();
       }
     }
 
     // /quizzes/{topicId}
-    // Writable because app.js seeds quiz documents via setDoc(quizDoc(topicId), quiz).
+    // Create and update stay open so any profile can import a shared test.
     match /quizzes/{topicId} {
-      allow read, write: if signedIn();
+      allow read:           if signedIn();
+      allow create, update: if signedIn();
+      allow delete:         if isAdmin();
     }
 
     // Any path not matched above is denied by default -- Firestore grants access only
