@@ -1,5 +1,5 @@
 import { initializeApp } from "https://www.gstatic.com/firebasejs/12.1.0/firebase-app.js";
-import { getFirestore, collection, doc, getDocs, setDoc, updateDoc, deleteDoc, getDoc, serverTimestamp, increment, writeBatch } from "https://www.gstatic.com/firebasejs/12.1.0/firebase-firestore.js";
+import { initializeFirestore, persistentLocalCache, persistentMultipleTabManager, getDocsFromCache, collection, doc, getDocs, setDoc, updateDoc, deleteDoc, getDoc, serverTimestamp, increment, writeBatch } from "https://www.gstatic.com/firebasejs/12.1.0/firebase-firestore.js";
 import { getAuth, signInAnonymously } from "https://www.gstatic.com/firebasejs/12.1.0/firebase-auth.js";
 
 const firebaseConfig = {
@@ -13,7 +13,12 @@ const firebaseConfig = {
 };
 
 const firebaseApp = initializeApp(firebaseConfig);
-const db = getFirestore(firebaseApp);
+// Persistent local cache lets a repeat visit paint profiles straight from IndexedDB
+// instead of waiting on ~4-6 sequential network round trips (sign-in, token lookup,
+// channel setup, query). Multi-tab manager so two open tabs do not fight over it.
+const db = initializeFirestore(firebaseApp, {
+  localCache: persistentLocalCache({ tabManager: persistentMultipleTabManager() })
+});
 const auth = getAuth(firebaseApp);
 
 const state = {
@@ -62,6 +67,20 @@ async function init() {
   // Paint something before the first network call so an empty row never looks broken.
   renderProfilesLoading();
 
+  // Reading the local cache needs no auth and no network, so on a repeat visit the
+  // profiles appear immediately and the server read below just refreshes them.
+  let paintedFromCache = false;
+  try {
+    const cached = await getDocsFromCache(collection(db, "profiles"));
+    if (!cached.empty) {
+      applyProfileSnapshot(cached);
+      renderProfiles();
+      paintedFromCache = true;
+    }
+  } catch (cacheErr) {
+    // No cache yet on a first visit. Fall through to the network read.
+  }
+
   try {
     // Firestore rules require an authenticated caller. Anonymous sign-in keeps the
     // no-password, pick-a-profile flow while closing the database to the open internet.
@@ -85,7 +104,9 @@ async function init() {
       await loadProfiles();
     } catch (profileErr) {
       console.warn("Could not load profiles:", profileErr);
-      state.profiles = [];
+      // Keep whatever the cache gave us rather than blanking the screen on a
+      // transient network failure.
+      if (!paintedFromCache) state.profiles = [];
     }
 
     renderProfiles();
@@ -95,10 +116,13 @@ async function init() {
   }
 }
 
-async function loadProfiles() {
-  const snap = await getDocs(collection(db, "profiles"));
+function applyProfileSnapshot(snap) {
   state.profiles = snap.docs.map(d => ({ id: d.id, ...d.data() }));
   state.profiles.sort((a,b) => (a.createdAt?.seconds || 0) - (b.createdAt?.seconds || 0));
+}
+
+async function loadProfiles() {
+  applyProfileSnapshot(await getDocs(collection(db, "profiles")));
 }
 
 async function loadQuizzes() {
