@@ -15,7 +15,24 @@ The app uses your supplied Firebase project configuration and Firestore.
 
 Create these Firestore collections/documents:
 
-### `quizzes/{topicId}`
+### `quizzes/{ownerProfileId}__{topicId}`
+
+Tests belong to the profile that imported them. The owner is part of the document id so
+two profiles can each own a test whose name slugifies the same way -- with a bare
+`topicId` as the id the second import silently overwrote the first, and because
+progress is keyed on `topicId` it also misattributed the first profile's history.
+
+Each document carries two ownership fields alongside the quiz content:
+
+- `ownerProfileId` -- the profile that imported it. A dashboard loads
+  `where("ownerProfileId","==",activeProfileId)` plus `where("shared","==",true)`.
+- `shared` -- `false` by default. Only the admin account can set or change it, and
+  that is enforced in `firestore.rules`, not just hidden in the UI.
+
+Note this is dashboard separation, not privacy: profiles are not login identities, so a
+rule cannot tell which profile is asking. Anyone holding the device can switch profile
+and see another profile's tests.
+
 
 Upload a quiz through the dashboard, or create it manually.
 

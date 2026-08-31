@@ -1,5 +1,5 @@
 import { initializeApp } from "https://www.gstatic.com/firebasejs/12.1.0/firebase-app.js";
-import { initializeFirestore, persistentLocalCache, persistentMultipleTabManager, getDocsFromCache, collection, doc, getDocs, setDoc, updateDoc, deleteDoc, getDoc, serverTimestamp, increment, writeBatch } from "https://www.gstatic.com/firebasejs/12.1.0/firebase-firestore.js";
+import { initializeFirestore, persistentLocalCache, persistentMultipleTabManager, getDocsFromCache, collection, doc, getDocs, setDoc, updateDoc, deleteDoc, getDoc, query, where, serverTimestamp, increment, writeBatch } from "https://www.gstatic.com/firebasejs/12.1.0/firebase-firestore.js";
 import { getAuth, signInAnonymously, signInWithEmailAndPassword, signOut } from "https://www.gstatic.com/firebasejs/12.1.0/firebase-auth.js";
 
 const firebaseConfig = {
@@ -36,6 +36,7 @@ const state = {
   editingProfileId: null,
   deletingProfileId: null,
   deletingTopicId: null,
+  deletingTopicOwnerId: null,
   isAdmin: false,
   settings: {}
 };
@@ -56,6 +57,10 @@ window.goToDashboard = goToDashboard;
 // delete permission by checking this email on the verified auth token.
 const ADMIN_EMAIL = "the4techies@gmail.com";
 
+// Owner recorded on a published test whose author was deleted. Matches no real profile,
+// so the test stays visible only through the shared query -- which is the intent.
+const ADMIN_OWNER_ID = "__admin__";
+
 // Returning to the dashboard must re-read progress, not just unhide the screen.
 // The back links used to call showScreen directly, which left stale percentages
 // and times on the cards until a manual page reload.
@@ -74,11 +79,29 @@ function profileDoc(profileId) { return doc(db, "profiles", profileId); }
 function progressDoc(profileId, topicId) {
   return doc(db, "profiles", profileId, "progress", topicId);
 }
-function quizDoc(topicId) { return doc(db, "quizzes", topicId); }
+// A quiz belongs to the profile that imported it. The owner is part of the document
+// id so two profiles can each own a test whose name slugifies the same way -- with a
+// bare topicId as the id, the second import silently overwrote the first, and because
+// progress is keyed on topicId it also misattributed the first profile's history.
+function quizDocId(ownerProfileId, topicId) { return `${ownerProfileId}__${topicId}`; }
+function quizDoc(ownerProfileId, topicId) {
+  return doc(db, "quizzes", quizDocId(ownerProfileId, topicId));
+}
 
-// Resolves once the shared quiz documents have been fetched. The profile screen does
-// not need them, so the dashboard awaits this instead of blocking first paint.
+// Resolves once the active profile's quizzes have been fetched. Reassigned on every
+// profile selection, since quizzes cannot be read before we know whose they are.
 let quizzesReady = Promise.resolve();
+// Incremented per profile selection. A read for a previous profile that resolves after
+// a switch must not paint its list, so renders compare against the epoch they started in.
+let quizEpoch = 0;
+
+function resetQuizState() {
+  state.quizzes = [];
+  state.currentQuiz = null;
+  state.quizLoadFailed = false;
+  state._progressCache = null;
+  state._progressCacheTopicId = null;
+}
 
 async function init() {
   // Paint something before the first network call so an empty row never looks broken.
@@ -109,12 +132,8 @@ async function init() {
       console.error("Anonymous sign-in failed. Enable Anonymous auth in the Firebase console (Authentication -> Sign-in method). All Firestore reads and writes will be denied until then.", authErr);
     }
 
-    // Kick the quiz read off now but do not await it here -- it is the heaviest read
-    // (every question of every topic) and nothing on the profile screen uses it.
-    quizzesReady = loadQuizzes().catch(quizErr => {
-      console.warn("Could not load quizzes yet:", quizErr);
-      state.quizzes = [];
-    });
+    // Quizzes are per-profile now, so there is nothing to prefetch here: the read
+    // needs a profile id and none is chosen yet. selectProfile() starts it instead.
 
     // Profiles are optional at first launch. The profile screen is always usable.
     try {
@@ -142,9 +161,25 @@ async function loadProfiles() {
   applyProfileSnapshot(await getDocs(collection(db, "profiles")));
 }
 
-async function loadQuizzes() {
+async function loadQuizzes(profileId) {
+  // Two single-field equality filters, both automatically indexed -- no composite
+  // index to configure. Also means a profile downloads only its own tests plus
+  // shared ones rather than every question of every topic in the database.
+  const [own, shared] = await Promise.all([
+    getDocs(query(collection(db, "quizzes"), where("ownerProfileId", "==", profileId))),
+    getDocs(query(collection(db, "quizzes"), where("shared", "==", true)))
+  ]);
+  // A profile's own published test appears in both results; key by id to dedupe.
+  const byId = new Map();
+  for (const d of [...own.docs, ...shared.docs]) byId.set(d.id, { id: d.id, ...d.data() });
+  state.quizzes = [...byId.values()];
+  state.quizLoadFailed = false;
+}
+
+// Admin needs every test regardless of owner, which is the one legitimate unscoped read.
+async function loadAllQuizzes() {
   const snap = await getDocs(collection(db, "quizzes"));
-  state.quizzes = snap.docs.map(d => ({ id: d.id, ...d.data() }));
+  return snap.docs.map(d => ({ id: d.id, ...d.data() }));
 }
 
 function renderProfilesLoading() {
@@ -179,23 +214,43 @@ function renderProfiles() {
 async function selectProfile(id) {
   state.currentProfile = state.profiles.find(p => p.id === id);
   if (!state.currentProfile) return;
+
+  // Drop the previous profile's quizzes before loading this one's, so the dashboard
+  // cannot show someone else's list during the read.
+  const epoch = ++quizEpoch;
+  resetQuizState();
+  quizzesReady = loadQuizzes(state.currentProfile.id).catch(err => {
+    console.warn("Could not load this profile's quizzes:", err);
+    state.quizLoadFailed = true;
+    state.quizzes = [];
+  });
+
   $("dashboard-title").textContent = `${state.currentProfile.name}'s Dashboard`;
   showScreen("dashboard-screen");
-  await renderDashboard();
+  await renderDashboard(epoch);
 }
 
-async function renderDashboard() {
+async function renderDashboard(epoch = quizEpoch) {
   const list = $("topic-list");
 
-  // Quizzes load in the background during init so they do not delay the profile
-  // screen. If the user reaches the dashboard first, wait for that read here.
+  // The read is started by selectProfile, so reaching the dashboard first is normal.
   list.innerHTML = `<div class="topic-card"><h2>Loading topics…</h2></div>`;
   await quizzesReady;
 
+  // A switch happened while we were waiting; the newer render owns the screen.
+  if (epoch !== quizEpoch) return;
+
   list.innerHTML = "";
 
+  if (state.quizLoadFailed) {
+    // Distinct from owning nothing -- an empty dashboard should not be the symptom
+    // of both "no tests yet" and "the read failed".
+    list.innerHTML = `<div class="topic-card"><h2>Could not load your tests</h2><p>Check your connection and switch back into this profile to retry.</p></div>`;
+    return;
+  }
+
   if (!state.quizzes.length) {
-    list.innerHTML = `<div class="topic-card"><h2>No quizzes yet</h2><p>Import a quiz JSON file below to add the first shared quiz. Your profile is ready.</p></div>`;
+    list.innerHTML = `<div class="topic-card"><h2>No tests yet</h2><p>Import a quiz JSON file below. Tests you import are yours alone — other profiles will not see them.</p></div>`;
     return;
   }
 
@@ -689,6 +744,7 @@ $("jsonUpload").addEventListener("change", async e => {
   if (!file) return;
   $("uploadText").textContent = `Loading: ${file.name}`;
   try {
+    if (!state.currentProfile) throw new Error("Pick a profile before importing a test.");
     const quiz = JSON.parse(await file.text());
     validateQuiz(quiz);
     const topicId = quiz.topicId || slugify(quiz.topicName || quiz.title || file.name);
@@ -699,13 +755,20 @@ $("jsonUpload").addEventListener("change", async e => {
       ...q, id:q.id || `${topicId}_q${String(i+1).padStart(3,"0")}`,
       answer: q.answer ?? q.correctAnswer
     }));
-    await setDoc(quizDoc(topicId), quiz);
-    const existing = state.quizzes.findIndex(q => (q.topicId || q.id) === topicId);
-    if (existing >= 0) state.quizzes[existing] = {id:topicId,...quiz};
-    else state.quizzes.push({id:topicId,...quiz});
+    const ownerProfileId = state.currentProfile.id;
+    quiz.ownerProfileId = ownerProfileId;
+    // Private by default. Only admin can publish, and the rules enforce that.
+    quiz.shared = false;
+
+    const docId = quizDocId(ownerProfileId, topicId);
+    await setDoc(quizDoc(ownerProfileId, topicId), quiz);
+    // Re-importing the same test as the same profile is still an update, not a duplicate.
+    const existing = state.quizzes.findIndex(q => q.id === docId);
+    if (existing >= 0) state.quizzes[existing] = {id:docId,...quiz};
+    else state.quizzes.push({id:docId,...quiz});
     $("uploadText").textContent = `Loaded: ${file.name}`;
-    alert("✓ Quiz added to the shared quiz library.");
-    if (state.currentProfile) await renderDashboard();
+    alert("✓ Test added to your library. Only this profile can see it.");
+    await renderDashboard();
   } catch(err) {
     console.error(err);
     alert(`✕ Could not import quiz: ${err.message}`);
@@ -765,6 +828,10 @@ function handleManageProfilesClick(event) {
   $("manage-modal").classList.remove("hidden");
 }
 $("switch-profile-btn").onclick = () => {
+  // Quizzes are per-profile, so leaving the dashboard must drop them along with the
+  // cached progress -- otherwise the next profile briefly sees this one's list.
+  quizEpoch++;
+  resetQuizState();
   renderProfiles();
   showScreen("profile-screen");
 };
@@ -883,6 +950,10 @@ async function adminExit() {
   } catch (err) {
     console.error("Could not return to an anonymous session:", err);
   }
+  // The admin view read every profile's tests; none of them belong to whoever picks
+  // a profile next.
+  quizEpoch++;
+  resetQuizState();
   await loadProfiles().catch(() => {});
   renderProfiles();
   showScreen("profile-screen");
@@ -890,14 +961,17 @@ async function adminExit() {
 
 // Pulls every profile's progress documents so the admin view can show real numbers
 // rather than just names. One read per profile, so it stays cheap at 3-4 profiles.
-async function collectProfileStats(profile) {
+async function collectProfileStats(profile, allQuizzes) {
   const snap = await getDocs(collection(db, "profiles", profile.id, "progress"));
   const topics = snap.docs.map(d => {
     const data = d.data();
     const questions = data.questions || {};
     const ids = Object.keys(questions);
     const mastered = ids.filter(k => questions[k]?.state === "MASTERED").length;
-    const quiz = state.quizzes.find(q => (q.topicId || q.id) === d.id);
+    // Match on the owning profile first: two profiles can now own a test with the
+    // same topicId, and a progress doc belongs to whichever one this profile owns.
+    const quiz = allQuizzes.find(q => q.ownerProfileId === profile.id && q.topicId === d.id)
+      || allQuizzes.find(q => (q.topicId || q.id) === d.id);
     return {
       topicId: d.id,
       topicName: quiz?.topicName || quiz?.title || d.id,
@@ -919,11 +993,13 @@ async function renderAdmin() {
   profileWrap.innerHTML = `<div class="topic-card"><h2>Loading…</h2></div>`;
   testWrap.innerHTML = "";
 
-  await quizzesReady;
+  // Admin wants every test regardless of owner, so it reads the collection directly
+  // instead of the profile-scoped state.quizzes.
+  let allQuizzes = [];
   try {
-    await loadProfiles();
+    [allQuizzes] = await Promise.all([loadAllQuizzes(), loadProfiles()]);
   } catch (err) {
-    console.warn("Admin could not refresh profiles:", err);
+    console.warn("Admin could not load tests or profiles:", err);
   }
 
   profileWrap.innerHTML = "";
@@ -932,7 +1008,7 @@ async function renderAdmin() {
   }
 
   for (const profile of state.profiles) {
-    const topics = await collectProfileStats(profile).catch(() => []);
+    const topics = await collectProfileStats(profile, allQuizzes).catch(() => []);
     const totalTime = topics.reduce((sum, t) => sum + t.timeSpent, 0);
     const totalMastered = topics.reduce((sum, t) => sum + t.mastered, 0);
     const totalSeen = topics.reduce((sum, t) => sum + t.seen, 0);
@@ -969,20 +1045,70 @@ async function renderAdmin() {
     profileWrap.appendChild(card);
   }
 
-  if (!state.quizzes.length) {
+  if (!allQuizzes.length) {
     testWrap.innerHTML = `<div class="topic-card"><p class="stats">No tests imported yet.</p></div>`;
     return;
   }
-  for (const quiz of state.quizzes) {
-    const label = quiz.topicName || quiz.title || quiz.id;
-    const card = document.createElement("div");
-    card.className = "topic-card";
-    card.innerHTML = `
-      <button class="topic-delete-btn" type="button" title="Delete this test" aria-label="Delete ${escapeHtml(label)}">🗑</button>
-      <h2>${escapeHtml(label)}</h2>
-      <p class="stats">${(quiz.questions || []).length} questions · ${(quiz.subtopics || []).length} subtopics</p>`;
-    card.querySelector(".topic-delete-btn").onclick = () => openQuizDeleteConfirm(quiz);
-    testWrap.appendChild(card);
+
+  const ownerName = id => {
+    if (id === ADMIN_OWNER_ID) return "Published (original profile deleted)";
+    return state.profiles.find(p => p.id === id)?.name || "Deleted profile";
+  };
+  // Group by owner so it is obvious who a test belongs to; unowned pre-migration
+  // documents fall into their own bucket rather than disappearing.
+  const groups = new Map();
+  for (const quiz of allQuizzes) {
+    const key = quiz.ownerProfileId || "";
+    if (!groups.has(key)) groups.set(key, []);
+    groups.get(key).push(quiz);
+  }
+
+  for (const [ownerId, quizzes] of groups) {
+    const heading = document.createElement("p");
+    heading.className = "stats admin-owner-heading";
+    heading.textContent = ownerId ? `${ownerName(ownerId)} — ${quizzes.length} test${quizzes.length === 1 ? "" : "s"}` : "No owner (imported before per-profile tests)";
+    testWrap.appendChild(heading);
+
+    for (const quiz of quizzes) {
+      const label = quiz.topicName || quiz.title || quiz.id;
+      const isShared = quiz.shared === true;
+      const card = document.createElement("div");
+      card.className = "topic-card";
+      card.innerHTML = `
+        <button class="topic-delete-btn" type="button" title="Delete this test" aria-label="Delete ${escapeHtml(label)}">🗑</button>
+        <h2>${escapeHtml(label)}${isShared ? ` <span class="shared-badge">Shared</span>` : ""}</h2>
+        <p class="stats">${(quiz.questions || []).length} questions · ${(quiz.subtopics || []).length} subtopics</p>
+        <button class="manage-btn small-btn publish-btn">${isShared ? "Unpublish" : "Publish to everyone"}</button>`;
+      card.querySelector(".topic-delete-btn").onclick = () => openQuizDeleteConfirm(quiz);
+      card.querySelector(".publish-btn").onclick = ev => togglePublish(quiz, !isShared, ev.currentTarget);
+      testWrap.appendChild(card);
+    }
+  }
+}
+
+// Publishing is the one per-profile boundary the rules can actually enforce: an
+// ordinary client cannot set or change `shared`, only admin can.
+async function togglePublish(quiz, makeShared, button) {
+  if (!quiz.ownerProfileId) {
+    alert("This test has no owner recorded, so it cannot be published. Re-import it first.");
+    return;
+  }
+  const label = quiz.topicName || quiz.title || quiz.id;
+  const msg = makeShared
+    ? `Publish "${label}" so every profile can see and study it?`
+    : `Unpublish "${label}"? Only ${state.profiles.find(p => p.id === quiz.ownerProfileId)?.name || "its owner"} will see it again. Progress already recorded by other profiles is kept.`;
+  if (!confirm(msg)) return;
+
+  button.disabled = true;
+  button.textContent = makeShared ? "Publishing…" : "Unpublishing…";
+  try {
+    await updateDoc(quizDoc(quiz.ownerProfileId, quiz.topicId || quiz.id), { shared: makeShared });
+    await renderAdmin();
+  } catch (err) {
+    console.error("Could not change published state:", err);
+    alert("Could not change that test's published state. Please try again.");
+    button.disabled = false;
+    button.textContent = makeShared ? "Publish to everyone" : "Unpublish";
   }
 }
 
@@ -1010,20 +1136,31 @@ function openQuizDeleteConfirm(quiz) {
   const topicId = quiz.topicId || quiz.id;
   if (!topicId) return;
   state.deletingTopicId = topicId;
+  // The owner is half the document id, so it has to survive until the confirm click.
+  state.deletingTopicOwnerId = quiz.ownerProfileId || null;
   state.deletingProfileId = null;
+  const label = quiz.topicName || quiz.title || topicId;
+  const reach = quiz.shared === true
+    ? "It is published, so this removes it for every profile."
+    : "It belongs to one profile, so only that profile loses it.";
   $("delete-message").textContent =
-    `Delete "${quiz.topicName || quiz.title || topicId}"? This removes the test for every profile. Your saved progress for it is kept in case you import it again.`;
+    `Delete "${label}"? ${reach} Saved progress for it is kept in case it is imported again.`;
   $("confirm-modal").classList.remove("hidden");
 }
 
 async function deleteQuizConfirmed() {
   const topicId = state.deletingTopicId;
+  const ownerId = state.deletingTopicOwnerId;
   const button = $("confirm-delete-btn");
   button.disabled = true;
   button.textContent = "Deleting…";
   try {
-    await deleteDoc(quizDoc(topicId));
-    state.quizzes = state.quizzes.filter(q => (q.topicId || q.id) !== topicId);
+    // Documents imported before per-profile ownership still have a bare topicId as
+    // their document id, so fall back to that rather than failing to delete them.
+    const ref = ownerId ? quizDoc(ownerId, topicId) : doc(db, "quizzes", topicId);
+    await deleteDoc(ref);
+    const goneId = ownerId ? quizDocId(ownerId, topicId) : topicId;
+    state.quizzes = state.quizzes.filter(q => q.id !== goneId);
     closeConfirmModal();
     if (!$("admin-screen").classList.contains("hidden")) await renderAdmin();
     else await renderDashboard();
@@ -1049,8 +1186,22 @@ $("confirm-delete-btn").onclick=async()=>{
   button.textContent = "Deleting…";
 
   try {
-    // Delete all topic-progress documents first, then the profile document.
-    // Quiz content in /quizzes is never touched.
+    // Delete this profile's own tests along with its progress. Before per-profile
+    // ownership quizzes were shared and deliberately left alone; now an owned test
+    // outliving its owner is unreachable -- no dashboard queries it and nothing but
+    // this cascade would ever remove it.
+    //
+    // Published tests are the exception: other profiles may be studying them, so they
+    // are handed to admin rather than deleted with their author.
+    const ownedSnap = await getDocs(query(collection(db, "quizzes"), where("ownerProfileId", "==", id)));
+    for (const quizSnap of ownedSnap.docs) {
+      if (quizSnap.data().shared === true) {
+        await updateDoc(quizSnap.ref, { ownerProfileId: ADMIN_OWNER_ID, orphanedFrom: id });
+      } else {
+        await deleteDoc(quizSnap.ref);
+      }
+    }
+
     const progressSnap = await getDocs(collection(db, "profiles", id, "progress"));
 
     if (progressSnap.size) {
@@ -1097,6 +1248,7 @@ function closeConfirmModal() {
   $("confirm-modal").classList.add("hidden");
   state.deletingProfileId=null;
   state.deletingTopicId=null;
+  state.deletingTopicOwnerId=null;
 }
 
 init();

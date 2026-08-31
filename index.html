@@ -33,7 +33,7 @@
     <div class="header-row">
       <div>
         <h1>Admin</h1>
-        <p>Every profile, its statistics, and the shared tests.</p>
+        <p>Every profile, its statistics, and every test grouped by owner.</p>
       </div>
       <button id="admin-exit-btn" class="manage-btn small-btn">Exit Admin</button>
     </div>
@@ -56,8 +56,8 @@
   </header>
   <div id="topic-list"></div>
   <div class="upload-section">
-    <h3>Import Custom Quiz</h3>
-    <p class="muted">Upload a .json file to add a quiz topic to the shared quiz library.</p>
+    <h3>Import a Test</h3>
+    <p class="muted">Upload a .json file to add a test to <em>your</em> library. Other profiles will not see it unless an admin publishes it.</p>
     <input type="file" id="jsonUpload" accept=".json" class="hidden-input">
     <label for="jsonUpload" class="upload-box"><span id="uploadText">+ Choose .json File</span></label>
   </div>

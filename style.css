@@ -102,6 +102,17 @@ p { color: #8a7a80; line-height: 1.5; }
 }
 .admin-table th { font-weight: 700; color: var(--rose); }
 .admin-table tbody tr:last-child td { border-bottom: none; }
+.admin-owner-heading {
+  margin: 18px 0 8px; color: var(--rose); font-size: 1rem; font-weight: 700;
+}
+.admin-owner-heading:first-child { margin-top: 0; }
+.shared-badge {
+  display: inline-block; vertical-align: middle; margin-left: 8px;
+  padding: 2px 10px; border-radius: 999px;
+  background: var(--soft); color: var(--rose);
+  font-size: .7rem; font-weight: 700; letter-spacing: .04em; text-transform: uppercase;
+}
+.publish-btn { margin-top: 12px; }
 .topic-meta { display:flex; justify-content:space-between; gap:10px; flex-wrap:wrap; }
 .progress-bar-container {
   width:100%; height:10px; background:var(--soft); border-radius:10px; margin:15px 0; overflow:hidden;
