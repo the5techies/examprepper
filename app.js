@@ -323,6 +323,33 @@ function saveConfig() {
   }
 }
 
+// Weighted (adaptive) is now the default mode. Configs saved while "quiz" was the
+// default would keep overriding it on every topic already configured, so switch those
+// over once. A saved "flashcards" is a deliberate choice and is left alone.
+function applyWeightedDefaultOnce() {
+  const FLAG = "examprepper:weightedDefaultApplied";
+  try {
+    if (localStorage.getItem(FLAG)) return;
+    for (let i = 0; i < localStorage.length; i++) {
+      const key = localStorage.key(i);
+      if (!key || !key.startsWith("examprepper:config:")) continue;
+      try {
+        const saved = JSON.parse(localStorage.getItem(key));
+        if (saved && saved.mode === "quiz") {
+          saved.mode = "weighted";
+          localStorage.setItem(key, JSON.stringify(saved));
+        }
+      } catch (entryErr) {
+        // One malformed entry should not stop the rest from being migrated.
+      }
+    }
+    localStorage.setItem(FLAG, "1");
+  } catch (err) {
+    // Private browsing or a full quota: the HTML default still applies to new topics.
+  }
+}
+applyWeightedDefaultOnce();
+
 async function openConfig(quiz) {
   state.currentQuiz = quiz;
   const topicId = quiz.topicId || quiz.id;
