@@ -56,10 +56,11 @@
   </header>
   <div id="topic-list"></div>
   <div class="upload-section">
-    <h3>Import a Test</h3>
-    <p class="muted">Upload a .json file to add a test to <em>your</em> library. Other profiles will not see it unless an admin publishes it.</p>
-    <input type="file" id="jsonUpload" accept=".json" class="hidden-input">
-    <label for="jsonUpload" class="upload-box"><span id="uploadText">+ Choose .json File</span></label>
+    <h3>Import Tests</h3>
+    <p class="muted">Drag .json files here, or choose several at once, to add tests to <em>your</em> library. Other profiles will not see them unless an admin publishes them.</p>
+    <input type="file" id="jsonUpload" accept=".json" class="hidden-input" multiple>
+    <label for="jsonUpload" class="upload-box"><span id="uploadText">+ Choose .json Files</span></label>
+    <p class="muted drop-hint">or drop them anywhere in this box</p>
   </div>
 </div>
 

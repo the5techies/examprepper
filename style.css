@@ -179,6 +179,12 @@ p { color: #8a7a80; line-height: 1.5; }
   background:#fff; border:2px dashed var(--rose); border-radius:20px;
   padding:30px 20px; text-align:center; margin-top:30px;
 }
+.upload-section.drag-over {
+  border-color:var(--text); background:var(--soft);
+}
+/* The panel is the drop target, so nothing inside it may swallow the drag events. */
+.upload-section.drag-over * { pointer-events:none; }
+.drop-hint { margin-top:10px; font-size:.85rem; }
 .hidden-input { display:none; }
 .upload-box {
   display:inline-block; background:var(--soft); color:var(--rose); border-radius:12px;

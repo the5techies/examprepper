@@ -172,14 +172,14 @@ async function loadQuizzes(profileId) {
   // A profile's own published test appears in both results; key by id to dedupe.
   const byId = new Map();
   for (const d of [...own.docs, ...shared.docs]) byId.set(d.id, { id: d.id, ...d.data() });
-  state.quizzes = [...byId.values()];
+  state.quizzes = sortByNewest([...byId.values()]);
   state.quizLoadFailed = false;
 }
 
 // Admin needs every test regardless of owner, which is the one legitimate unscoped read.
 async function loadAllQuizzes() {
   const snap = await getDocs(collection(db, "quizzes"));
-  return snap.docs.map(d => ({ id: d.id, ...d.data() }));
+  return sortByNewest(snap.docs.map(d => ({ id: d.id, ...d.data() })));
 }
 
 function renderProfilesLoading() {
@@ -254,6 +254,9 @@ async function renderDashboard(epoch = quizEpoch) {
     return;
   }
 
+  // Newest import first, so a test added just now is the first thing on the screen.
+  sortByNewest(state.quizzes);
+
   for (const quiz of state.quizzes) {
     const progress = await calculateTopicProgress(quiz);
     const card = document.createElement("div");
@@ -267,6 +270,7 @@ async function renderDashboard(epoch = quizEpoch) {
       <div class="topic-meta">
         <p class="stats">${progress.percent}% covered</p>
         <p class="stats">Time spent: ${formatDuration(progress.timeSpent)}</p>
+        <p class="stats">Added: ${escapeHtml(formatDate(quiz))}</p>
       </div>
       <p class="stats">${progress.mastered}/${progress.total} questions mastered</p>
       <button class="action-btn">Configure Session →</button>`;
@@ -766,43 +770,110 @@ function renderReview() {
   });
 }
 
-$("jsonUpload").addEventListener("change", async e => {
-  const file = e.target.files[0];
-  if (!file) return;
-  $("uploadText").textContent = `Loading: ${file.name}`;
-  try {
-    if (!state.currentProfile) throw new Error("Pick a profile before importing a test.");
-    const quiz = JSON.parse(await file.text());
-    validateQuiz(quiz);
-    const topicId = quiz.topicId || slugify(quiz.topicName || quiz.title || file.name);
-    quiz.topicId = topicId;
-    quiz.topicName = quiz.topicName || quiz.title || topicId;
-    quiz.subtopics = quiz.subtopics || inferSubtopics(quiz.questions || []);
-    quiz.questions = (quiz.questions || []).map((q,i) => ({
-      ...q, id:q.id || `${topicId}_q${String(i+1).padStart(3,"0")}`,
-      answer: q.answer ?? q.correctAnswer
-    }));
-    const ownerProfileId = state.currentProfile.id;
-    quiz.ownerProfileId = ownerProfileId;
-    // Private by default. Only admin can publish, and the rules enforce that.
-    quiz.shared = false;
+// One file's worth of import work, so a multi-file drop can report per-file outcomes
+// instead of aborting the whole batch on the first bad JSON.
+async function importQuizFile(file) {
+  if (!state.currentProfile) throw new Error("Pick a profile before importing a test.");
+  const quiz = JSON.parse(await file.text());
+  validateQuiz(quiz);
+  const topicId = quiz.topicId || slugify(quiz.topicName || quiz.title || file.name);
+  quiz.topicId = topicId;
+  quiz.topicName = quiz.topicName || quiz.title || topicId;
+  quiz.subtopics = quiz.subtopics || inferSubtopics(quiz.questions || []);
+  quiz.questions = (quiz.questions || []).map((q,i) => ({
+    ...q, id:q.id || `${topicId}_q${String(i+1).padStart(3,"0")}`,
+    answer: q.answer ?? q.correctAnswer
+  }));
+  const ownerProfileId = state.currentProfile.id;
+  quiz.ownerProfileId = ownerProfileId;
+  // Private by default. Only admin can publish, and the rules enforce that.
+  quiz.shared = false;
 
-    const docId = quizDocId(ownerProfileId, topicId);
-    await setDoc(quizDoc(ownerProfileId, topicId), quiz);
-    // Re-importing the same test as the same profile is still an update, not a duplicate.
-    const existing = state.quizzes.findIndex(q => q.id === docId);
-    if (existing >= 0) state.quizzes[existing] = {id:docId,...quiz};
-    else state.quizzes.push({id:docId,...quiz});
-    $("uploadText").textContent = `Loaded: ${file.name}`;
-    alert("✓ Test added to your library. Only this profile can see it.");
-    await renderDashboard();
-  } catch(err) {
-    console.error(err);
-    alert(`✕ Could not import quiz: ${err.message}`);
-    $("uploadText").textContent = "+ Choose .json File";
+  const docId = quizDocId(ownerProfileId, topicId);
+  const ref = quizDoc(ownerProfileId, topicId);
+  // setDoc replaces the document, so re-importing would otherwise reset the date to
+  // now and jump an old test back to the top of the list. Carry the original forward.
+  const prior = await getDoc(ref);
+  const priorCreatedAt = prior.exists() ? prior.data().createdAt : null;
+  quiz.createdAt = priorCreatedAt || serverTimestamp();
+  quiz.updatedAt = serverTimestamp();
+
+  await setDoc(ref, quiz);
+  // The write only sends a sentinel, so stand in a local date for the render that
+  // follows; the next load from Firestore replaces it with the server value.
+  const local = { id:docId, ...quiz, createdAt: priorCreatedAt || { seconds: Date.now()/1000 } };
+  // Re-importing the same test as the same profile is still an update, not a duplicate.
+  const existing = state.quizzes.findIndex(q => q.id === docId);
+  if (existing >= 0) state.quizzes[existing] = local;
+  else state.quizzes.push(local);
+  return quiz.topicName;
+}
+
+async function importQuizFiles(fileList) {
+  const files = [...(fileList || [])].filter(f => f && /\.json$/i.test(f.name));
+  const rejected = [...(fileList || [])].length - files.length;
+  if (!files.length) {
+    alert(rejected ? "✕ Only .json files can be imported." : "✕ No files to import.");
+    return;
   }
+
+  const added = [], failed = [];
+  for (const [i, file] of files.entries()) {
+    $("uploadText").textContent = `Loading ${i+1} of ${files.length}: ${file.name}`;
+    try {
+      added.push(await importQuizFile(file));
+    } catch(err) {
+      console.error(file.name, err);
+      failed.push(`${file.name}: ${err.message}`);
+    }
+  }
+
+  $("uploadText").textContent = added.length
+    ? `Loaded ${added.length} test${added.length === 1 ? "" : "s"}`
+    : "+ Choose .json Files";
+  if (added.length) await renderDashboard();
+
+  const parts = [];
+  if (added.length) parts.push(`✓ Added to your library:\n${added.map(n => `• ${n}`).join("\n")}`);
+  if (failed.length) parts.push(`✕ Could not import:\n${failed.map(n => `• ${n}`).join("\n")}`);
+  if (rejected) parts.push(`${rejected} file${rejected === 1 ? "" : "s"} skipped (not .json).`);
+  alert(parts.join("\n\n"));
+}
+
+$("jsonUpload").addEventListener("change", async e => {
+  await importQuizFiles(e.target.files);
   e.target.value = "";
 });
+
+// Drag and drop onto the import panel. dragenter/dragover must both be cancelled or
+// the browser navigates to the dropped file instead of handing it to us.
+const dropZone = document.querySelector(".upload-section");
+if (dropZone) {
+  for (const type of ["dragenter", "dragover"]) {
+    dropZone.addEventListener(type, e => {
+      e.preventDefault();
+      dropZone.classList.add("drag-over");
+    });
+  }
+  dropZone.addEventListener("dragleave", e => {
+    // Moving over a child fires dragleave on the parent; ignore unless the pointer
+    // actually left the panel, or the highlight flickers.
+    if (!dropZone.contains(e.relatedTarget)) dropZone.classList.remove("drag-over");
+  });
+  dropZone.addEventListener("drop", async e => {
+    e.preventDefault();
+    dropZone.classList.remove("drag-over");
+    await importQuizFiles(e.dataTransfer?.files);
+  });
+}
+
+// A file dropped anywhere else would otherwise be opened by the browser, discarding
+// the app state along with the in-progress session.
+for (const type of ["dragover", "drop"]) {
+  window.addEventListener(type, e => {
+    if (!dropZone || !dropZone.contains(e.target)) e.preventDefault();
+  });
+}
 
 function validateQuiz(quiz) {
   if (!quiz.questions || !Array.isArray(quiz.questions) || !quiz.questions.length) throw new Error("Quiz needs a non-empty questions array.");
@@ -829,6 +900,31 @@ function formatDuration(seconds) {
   const h=Math.floor(seconds/3600), m=Math.floor((seconds%3600)/60);
   return h ? `${h}h ${m}m` : `${m}m`;
 }
+// Firestore hands back a Timestamp on a server read but our own optimistic local
+// entries carry a plain {seconds}, and tests imported before this field existed carry
+// nothing at all -- so read the seconds defensively everywhere we sort or format.
+function addedSeconds(quiz) {
+  const ts = quiz?.createdAt;
+  if (!ts) return 0;
+  if (typeof ts.seconds === "number") return ts.seconds;
+  if (typeof ts.toDate === "function") return ts.toDate().getTime() / 1000;
+  return 0;
+}
+
+// Newest first. Tests with no recorded date sort to the bottom rather than the top,
+// where a missing timestamp would otherwise read as "added at the epoch".
+function sortByNewest(quizzes) {
+  return quizzes.sort((a, b) => addedSeconds(b) - addedSeconds(a));
+}
+
+function formatDate(quiz) {
+  const seconds = addedSeconds(quiz);
+  if (!seconds) return "Unknown";
+  return new Date(seconds * 1000).toLocaleDateString(undefined, {
+    year: "numeric", month: "short", day: "numeric"
+  });
+}
+
 function escapeHtml(value) {
   return String(value ?? "").replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#039;'}[c]));
 }
@@ -1083,6 +1179,9 @@ async function renderAdmin() {
   };
   // Group by owner so it is obvious who a test belongs to; unowned pre-migration
   // documents fall into their own bucket rather than disappearing.
+  // allQuizzes already arrives newest first, so iterating it in order both puts the
+  // most recently imported test at the top of each group and orders the groups
+  // themselves by whoever imported most recently.
   const groups = new Map();
   for (const quiz of allQuizzes) {
     const key = quiz.ownerProfileId || "";
@@ -1105,6 +1204,7 @@ async function renderAdmin() {
         <button class="topic-delete-btn" type="button" title="Delete this test" aria-label="Delete ${escapeHtml(label)}">🗑</button>
         <h2>${escapeHtml(label)}${isShared ? ` <span class="shared-badge">Shared</span>` : ""}</h2>
         <p class="stats">${(quiz.questions || []).length} questions · ${(quiz.subtopics || []).length} subtopics</p>
+        <p class="stats">Added: ${escapeHtml(formatDate(quiz))}</p>
         <button class="manage-btn small-btn publish-btn">${isShared ? "Unpublish" : "Publish to everyone"}</button>`;
       card.querySelector(".topic-delete-btn").onclick = () => openQuizDeleteConfirm(quiz);
       card.querySelector(".publish-btn").onclick = ev => togglePublish(quiz, !isShared, ev.currentTarget);
